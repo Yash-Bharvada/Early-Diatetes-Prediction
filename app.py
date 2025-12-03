@@ -1,113 +1,296 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import joblib
+from diabetes_app import get_predictor, HealthInput
+from diabetes_app.i18n import get_translator
+from diabetes_app.analytics import emit_event
 import shap
 import matplotlib.pyplot as plt
 
-# --- Load model artifacts ---
-model = joblib.load("diabetes_model.pkl")
-scaler = joblib.load("scaler.pkl")
-feature_names = joblib.load("feature_names.pkl")
+_predict = get_predictor()
+model, scaler, feature_names = None, None, None
+try:
+    # Access feature names by calling once
+    meta = _predict([0] * 8)
+    feature_names = meta["feature_names"]
+except Exception:
+    pass
+
+df = pd.read_csv("pima.csv")
+zero_columns = ["Pregnancies", "Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
+df[zero_columns] = df[zero_columns].replace(0, np.nan)
+df[zero_columns] = df[zero_columns].fillna(df[zero_columns].median())
+feature_defaults = df.drop("Outcome", axis=1).median().to_dict()
+MAIN_FEATURES = [f for f in [
+    "Glucose",
+    "Insulin",
+    "BloodPressure",
+    "SkinThickness",
+    "BMI",
+    "DiabetesPedigreeFunction",
+    "Age",
+    "Pregnancies",
+] if f in feature_names]
 
 # --- Streamlit page settings ---
-st.set_page_config(page_title="Diabetes Risk Predictor", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="Diabetes Risk Predictor", layout="wide")
 
 # --- Header ---
 st.markdown("""
-# 🩺 Smart Diabetes Risk Predictor  
-Estimate your diabetes risk based on your clinical data.Powered by Machine Learning & SHAP for transparent decision-making.
-""")
+<div style="text-align:center;">
+  <h1 style="margin-bottom:0;">Diabetes Risk Predictor</h1>
+  <div style="opacity:0.8;">Interactive health assessment tool for early diabetes detection</div>
+</div>
+""", unsafe_allow_html=True)
 
-# --- Input form ---
-st.markdown("### 📝 Enter Your Health Information")
+with st.sidebar:
+    theme = st.radio("Theme", ["Light", "Dark"], horizontal=True)
+    lang = st.selectbox("Language", ["en", "hi"], index=0)
+    st.markdown("### Settings")
 
-with st.form("prediction_form"):
-    inputs = []
-    cols = st.columns(2)
+is_dark = theme == "Dark"
+primary_bg = "#0E1117" if is_dark else "#FFFFFF"
+primary_text = "#FAFAFA" if is_dark else "#0E1117"
+accent = "#7c3aed"  # unified accent for both themes
+panel_bg = "#1F2937" if is_dark else "#FFFFFF"
+panel_border = "rgba(255,255,255,0.15)" if is_dark else "rgba(0,0,0,0.1)"
+pill_bg = "#2f3b52" if is_dark else "#eef2ff"
+pill_border = "#3b4a66" if is_dark else "#dde3ff"
+pill_text = "#e5e7eb" if is_dark else "#111827"
+st.markdown(f"""
+    <style>
+    .stApp {{
+        background-color: {primary_bg};
+        color: {primary_text};
+    }}
+    .block-container {{
+        padding-left: 2rem;
+        padding-right: 2rem;
+        max-width: 1200px;
+    }}
+    .stButton>button {{
+        background-color: {accent} !important;
+        color: #ffffff !important;
+        border-radius: 8px;
+        padding: 0.6rem 1rem;
+        border: none;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    }}
+    /* Ensure submit buttons inside forms are styled */
+    .stButton button,
+    form button,
+    div[data-testid="baseButton-primary"] > button {{
+        background-color: {accent} !important;
+        color: #ffffff !important;
+        font-weight: 600;
+    }}
+    .stButton>button:focus {{
+        outline: 2px solid #ffffff;
+        box-shadow: 0 0 0 3px rgba(124,58,237,0.4);
+    }}
+    .stNumberInput input {{
+        font-size: 1rem;
+        padding: 0.4rem;
+    }}
+    /* Ensure widget labels are readable in dark mode */
+    .stSlider > label,
+    .stNumberInput > label,
+    div[data-testid="stWidgetLabel"] > label {{
+        color: {primary_text} !important;
+        font-weight: 600;
+    }}
+    h1, h2, h3 {{
+        color: {primary_text};
+    }}
+    .card {{
+        border: 1px solid {panel_border};
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        background: {panel_bg};
+    }}
+    .panel {{
+        border: 1px solid {panel_border};
+        border-radius: 12px;
+        padding: 1rem;
+        background: {panel_bg};
+        color: {primary_text};
+    }}
+    .title {{
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }}
+    .subtitle {{
+        font-size: 0.9rem;
+        opacity: 0.85;
+        margin-bottom: 0.5rem;
+    }}
+    .pill {{
+        display:inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        background:{pill_bg};
+        border:1px solid {pill_border};
+        color:{pill_text};
+    }}
+    .circle {{
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        border: 8px solid {accent};
+        margin:auto;
+        font-weight:700;
+        color: {primary_text};
+    }}
+    div[data-testid="stProgressBar"] > div > div {{
+        background-color: {accent} !important;
+    }}
+    div[role="alert"] {{
+        color: {primary_text};
+    }}
+    @media (max-width: 768px) {{
+        .block-container {{
+            padding-left: 1rem;
+            padding-right: 1rem;
+            max-width: 100%;
+        }}
+        .circle {{ width: 100px; height: 100px; border-width: 6px; }}
+    }}
+    </style>
+""", unsafe_allow_html=True)
 
-    for i, name in enumerate(feature_names):
-        minv, maxv, defv = 0, 200, 100
-        if name == "Pregnancies":
-            minv, maxv, defv = 0, 10, 1
-        elif name == "BMI":
-            minv, maxv, defv = 10.0, 60.0, 25.0
-        elif name == "DiabetesPedigreeFunction":
-            minv, maxv, defv = 0.0, 2.5, 0.5
-        elif name == "Age":
-            minv, maxv, defv = 10, 100, 30
+t = get_translator(lang)
+tab_input, tab_results = st.tabs([t("tab_input"), t("tab_results")])
 
-        col = cols[i % 2]
-        val = col.number_input(
-            f"{name}:", min_value=minv, max_value=maxv, value=defv,
-            step=0.1 if isinstance(defv, float) else 1,
-            format="%.1f" if isinstance(defv, float) else "%d"
-        )
-        inputs.append(val)
+with tab_input:
+    with st.form("prediction_form"):
+        user_inputs = {}
+        left, right = st.columns(2)
 
-    submit = st.form_submit_button("🚀 Predict Risk")
+        with left:
+            st.markdown(f"<div class='title' aria-label='{t('glucose_insulin')}'>{t('glucose_insulin')}</div><div class='subtitle'>Blood sugar and insulin levels</div>", unsafe_allow_html=True)
+            g = st.slider(t("glucose"), 0, 300, int(feature_defaults.get("Glucose", 110)))
+            st.caption("Normal: 70-100 mg/dL (fasting)")
+            i = st.slider(t("insulin"), 0, 300, int(min(feature_defaults.get("Insulin", 80), 300)))
+            user_inputs["Glucose"] = g
+            user_inputs["Insulin"] = i
+
+        with right:
+            st.markdown(f"<div class='title' aria-label='{t('cardio')}'>{t('cardio')}</div><div class='subtitle'>Blood pressure measurements</div>", unsafe_allow_html=True)
+            bp = st.slider(t("bp"), 40, 140, int(max(40, min(feature_defaults.get("BloodPressure", 80), 140))))
+            st.caption("Normal: 60-80 mmHg (diastolic)")
+            st_val = st.slider(t("skin"), 0, 80, int(min(feature_defaults.get("SkinThickness", 20), 80)))
+            user_inputs["BloodPressure"] = bp
+            user_inputs["SkinThickness"] = st_val
+
+        left2, right2 = st.columns(2)
+        with left2:
+            st.markdown(f"<div class='title' aria-label='{t('body_metrics')}'>{t('body_metrics')}</div><div class='subtitle'>Physical measurements</div>", unsafe_allow_html=True)
+            bmi = st.slider(t("bmi"), 10.0, 60.0, float(feature_defaults.get("BMI", 25.0)), step=0.1)
+            st.caption("Normal: 18.5-24.9")
+            dpf = st.slider(t("dpf"), 0.0, 2.5, float(feature_defaults.get("DiabetesPedigreeFunction", 0.5)), step=0.01)
+            user_inputs["BMI"] = bmi
+            user_inputs["DiabetesPedigreeFunction"] = dpf
+
+        with right2:
+            st.markdown(f"<div class='title' aria-label='{t('demographics')}'>{t('demographics')}</div><div class='subtitle'>Personal information</div>", unsafe_allow_html=True)
+            age = st.slider(t("age"), 10, 100, int(feature_defaults.get("Age", 35)))
+            preg = st.slider(t("preg"), 0, 15, int(feature_defaults.get("Pregnancies", 0)))
+            user_inputs["Age"] = age
+            user_inputs["Pregnancies"] = preg
+
+        submit = st.form_submit_button(t("calc_button"))
 
 # --- Predict and explain ---
 if submit:
-    st.markdown("## 🧠 Prediction Result")
-
-    user_input = np.array(inputs).reshape(1, -1)
-    scaled_input = scaler.transform(user_input)
-
-    prediction = model.predict(scaled_input)[0]
-    probability = model.predict_proba(scaled_input)[0][1]
-
-    if prediction:
-        st.error(f"⚠️ **High risk of diabetes**\n\n🩸 **Probability:** `{probability:.2%}`")
+    full_values = []
+    # Use validation model if feature_names known
+    if feature_names:
+        # Construct validated input
+        validated = HealthInput(**{fn: user_inputs.get(fn, int(feature_defaults.get(fn, 0))) for fn in feature_names})
+        full_values = validated.to_array(feature_names)
     else:
-        st.success(f"✅ **Low risk of diabetes**\n\n🩺 **Probability:** `{probability:.2%}`")
+        for name in user_inputs:
+            full_values.append(user_inputs[name])
+    with st.spinner("Calculating..."):
+        result = _predict(full_values)
+    st.session_state["prediction"] = result["prediction"]
+    st.session_state["probability"] = result["probability"]
+    st.session_state["user_inputs"] = user_inputs
+    emit_event("predict", {"probability": result["probability"], "prediction": result["prediction"]})
 
-    # --- SHAP Explanation ---
-    st.markdown("### 🔍 Feature Importance (via SHAP)")
-    try:
-        explainer = shap.Explainer(model, masker=scaler.transform(np.zeros((1, len(inputs)))))
-        shap_values = explainer(scaled_input)
+with tab_results:
+    if "probability" not in st.session_state:
+        st.info("Provide input data and click Calculate Risk Score.")
+    else:
+        prob = st.session_state["probability"]
+        pred = st.session_state["prediction"]
+        ui = st.session_state["user_inputs"]
 
-        # Bar plot
-        fig, ax = plt.subplots(figsize=(8, 4))
-        shap.plots.bar(shap_values[0], show=False)
-        st.pyplot(fig)
+        st.markdown(f"<div class='title' aria-label='{t('results_title')}'>{t('results_title')}</div><div class='subtitle'>{t('results_sub')}</div>", unsafe_allow_html=True)
+        cols_top = st.columns([1,3])
+        with cols_top[0]:
+            st.markdown(f"<div class='circle'>{int(prob*100)}%</div>", unsafe_allow_html=True)
+        with cols_top[1]:
+            label = t("high_risk") if pred == 1 else t("low_risk")
+            st.subheader(label)
+            st.progress(int(prob*100))
+            if pred == 1:
+                st.error("Your risk factors exceed healthy ranges. Consider medical guidance.")
+            else:
+                st.success("Your risk factors are within healthy ranges. Continue a healthy lifestyle.")
 
-        # Verbal explanation
-        st.markdown("### 🧬 Top Contributing Features")
-        shap_df = pd.DataFrame({
-            "Feature": feature_names,
-            "SHAP Value": shap_values[0].values,
-            "Your Value": user_input[0]
-        }).sort_values(by="SHAP Value", key=abs, ascending=False)
+        st.markdown(f"<div class='title'>{t('breakdown')}</div><div class='subtitle'>{t('breakdown_sub')}</div>", unsafe_allow_html=True)
+        rcols = st.columns(2)
+        def badge(val):
+            return f"<span class='pill'>{val}</span>"
+        def risk_tag(feature, val):
+            if feature == "Glucose":
+                if val < 100: return "LOW RISK"
+                if val < 126: return "MEDIUM RISK"
+                return "HIGH RISK"
+            if feature == "BMI":
+                if val < 25: return "LOW RISK"
+                if val < 30: return "MEDIUM RISK"
+                return "HIGH RISK"
+            if feature == "BloodPressure":
+                if 60 <= val <= 80: return "LOW RISK"
+                if 80 < val <= 90 or 50 <= val < 60: return "MEDIUM RISK"
+                return "HIGH RISK"
+            if feature == "Age":
+                if val < 40: return "LOW RISK"
+                if val < 60: return "MEDIUM RISK"
+                return "HIGH RISK"
+            return "—"
+        with rcols[0]:
+            st.markdown(f"<div class='panel'>Glucose Level {badge(ui.get('Glucose',''))}<br><small>{risk_tag('Glucose', ui.get('Glucose',0))}</small></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='panel'>Blood Pressure {badge(ui.get('BloodPressure',''))}<br><small>{risk_tag('BloodPressure', ui.get('BloodPressure',0))}</small></div>", unsafe_allow_html=True)
+        with rcols[1]:
+            st.markdown(f"<div class='panel'>BMI {badge(ui.get('BMI',''))}<br><small>{risk_tag('BMI', ui.get('BMI',0))}</small></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='panel'>Age {badge(ui.get('Age',''))}<br><small>{risk_tag('Age', ui.get('Age',0))}</small></div>", unsafe_allow_html=True)
 
-        for i in range(3):
-            row = shap_df.iloc[i]
-            f, v, s = row["Feature"], row["Your Value"], row["SHAP Value"]
-            direction = "increased" if s > 0 else "decreased"
-            st.markdown(f"🔹 **{f} = {v}** → This feature **{direction}** your diabetes risk.")
+        st.markdown(f"<div class='title'>{t('recommendations')}</div>", unsafe_allow_html=True)
+        st.write("- Monitor blood glucose levels and maintain a balanced diet low in refined sugars.")
+        st.write("- Schedule regular check-ups with your healthcare provider for monitoring.")
+        st.write("- Stay hydrated, sleep 7–9 hours, and manage stress via mindfulness or exercise.")
 
-            if f == "Glucose":
-                st.markdown("🩸 _Glucose is the strongest indicator for diabetes risk._")
-            elif f == "BMI":
-                st.markdown("⚖️ _Higher BMI correlates with increased insulin resistance._")
-            elif f == "Age":
-                st.markdown("👵 _Older individuals generally have higher risk._")
-            elif f == "Insulin":
-                st.markdown("💉 _Abnormal insulin levels may signal diabetes._")
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Modify inputs"):
+                st.info("Switch to the Input Data tab to adjust values.")
+        with b2:
+            if st.button("Recalculate"):
+                if "user_inputs" in st.session_state:
+                    pass
 
-    except Exception as e:
-        st.warning("⚠️ SHAP explanation failed.")
-        st.error(str(e))
-
-    st.info("💡 _This result is an estimate. Please consult a medical professional for diagnosis._")
+    st.info("💡 This result is an estimate. Please consult a medical professional.")
 
 # --- Footer ---
 st.markdown("""
 ---
-#### 📌 Disclaimer  
-This tool is a machine learning demo made for educational purposes only.  
-It is **not** a substitute for professional medical diagnosis or advice.  
-
-_Built by **Yash Bharvada** (CSE) with ❤️ using Streamlit, Scikit-learn, and SHAP._
+Disclaimer: This tool is for educational purposes only and should not replace professional medical advice. Always consult with a qualified healthcare provider for proper diagnosis and treatment.
 """)

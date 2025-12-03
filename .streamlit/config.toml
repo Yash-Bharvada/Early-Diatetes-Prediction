@@ -1,0 +1,10 @@
+[theme]
+base = "dark"
+primaryColor = "#7c3aed"
+backgroundColor = "#0E1117"
+textColor = "#FAFAFA"
+
+[server]
+headless = true
+enableXsrfProtection = true
+# Do not hardcode port; let Streamlit choose, or override via CLI
