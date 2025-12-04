@@ -164,9 +164,18 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 t = get_translator(lang)
-tab_input, tab_results = st.tabs([t("tab_input"), t("tab_results")])
+# Controlled tab switch via radio for accessibility and programmatic navigation
+if "view" not in st.session_state:
+    st.session_state["view"] = "input"
+view = st.radio(
+    "View",
+    options=["input", "results"],
+    format_func=lambda x: t("tab_input") if x == "input" else t("tab_results"),
+    horizontal=True,
+    key="view",
+)
 
-with tab_input:
+if view == "input":
     with st.form("prediction_form"):
         user_inputs = {}
         left, right = st.columns(2)
@@ -216,14 +225,14 @@ if submit:
     else:
         for name in user_inputs:
             full_values.append(user_inputs[name])
-    with st.spinner("Calculating..."):
-        result = _predict(full_values)
+    result = _predict(full_values)
     st.session_state["prediction"] = result["prediction"]
     st.session_state["probability"] = result["probability"]
     st.session_state["user_inputs"] = user_inputs
     emit_event("predict", {"probability": result["probability"], "prediction": result["prediction"]})
+    st.session_state["view"] = "results"
 
-with tab_results:
+else:
     if "probability" not in st.session_state:
         st.info("Provide input data and click Calculate Risk Score.")
     else:
@@ -293,11 +302,22 @@ with tab_results:
         b1, b2 = st.columns(2)
         with b1:
             if st.button("Modify inputs"):
-                st.info("Switch to the Input Data tab to adjust values.")
+                st.session_state["view"] = "input"
+                st.rerun()
         with b2:
             if st.button("Recalculate"):
-                if "user_inputs" in st.session_state:
-                    pass
+                ui_state = st.session_state.get("user_inputs")
+                if ui_state:
+                    if feature_names:
+                        validated = HealthInput(**{fn: ui_state.get(fn, int(feature_defaults.get(fn, 0))) for fn in feature_names})
+                        fv = validated.to_array(feature_names)
+                    else:
+                        fv = [ui_state.get(k) for k in sorted(ui_state.keys())]
+                    result = _predict(fv)
+                    st.session_state["prediction"] = result["prediction"]
+                    st.session_state["probability"] = result["probability"]
+                    st.session_state["view"] = "results"
+                    st.rerun()
 
     st.info("💡 This result is an estimate. Please consult a medical professional.")
 
