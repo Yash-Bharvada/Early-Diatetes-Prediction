@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -6,6 +7,9 @@ from diabetes_app import HealthInput, get_predictor
 from diabetes_app.analytics import emit_event
 from diabetes_app.i18n import get_translator
 import streamlit.components.v1 as components
+import plotly.express as px
+import plotly.graph_objects as go
+from diabetes_app.model import load_artifacts
 
 _predict = get_predictor()
 model, scaler, feature_names = None, None, None
@@ -248,9 +252,8 @@ if view == "input" and submit:
     components.html(
         f"""
         <script>
-        const data = {json: '{pd.Series(user_inputs).to_json()}'};
         try {{
-            localStorage.setItem('diabetes_inputs', JSON.stringify({user_inputs}));
+            localStorage.setItem('diabetes_inputs', '{json.dumps(user_inputs)}');
             localStorage.setItem('calc_ts', '{st.session_state['calc_ts']}');
         }} catch(e) {{}}
         document.documentElement.style.transition = 'opacity 300ms';
@@ -287,6 +290,7 @@ if view == "results":
                 st.error("Your risk factors exceed healthy ranges. Consider medical guidance.")
             else:
                 st.success("Your risk factors are within healthy ranges. Continue a healthy lifestyle.")
+            st.caption(f"Calculated at {st.session_state.get('calc_ts','')} UTC")
 
         st.markdown(f"<div class='title'>{t('breakdown')}</div><div class='subtitle'>{t('breakdown_sub')}</div>", unsafe_allow_html=True)
         rcols = st.columns(2)
@@ -334,6 +338,47 @@ if view == "results":
         st.write("- Schedule regular check-ups with your healthcare provider for monitoring.")
         st.write("- Stay hydrated, sleep 7–9 hours, and manage stress via mindfulness or exercise.")
 
+        vis_tabs = st.tabs(["Feature Importance", "Correlation Matrix", "Interactive Explorer"])
+        with vis_tabs[0]:
+            try:
+                m, s, fn = load_artifacts()
+                if hasattr(m, "feature_importances_"):
+                    imp = m.feature_importances_
+                elif hasattr(m, "coef_"):
+                    imp = abs(m.coef_[0])
+                else:
+                    imp = None
+                if imp is not None:
+                    df_imp = pd.DataFrame({"Feature": fn, "Importance": imp}).sort_values("Importance", ascending=False)
+                    fig = px.bar(df_imp, x="Feature", y="Importance", title="Feature Importance Ranking", color="Importance", color_continuous_scale=[[0, accent],[1, accent]])
+                    fig.update_layout(xaxis_title="Feature", yaxis_title="Importance", legend_title="")
+                    st.plotly_chart(fig, use_container_width=True)
+                    top = df_imp.iloc[0]
+                    st.write(f"Top contributor: {top['Feature']}.")
+                else:
+                    st.info("Importance not available for this model.")
+            except Exception as e:
+                st.warning("Could not render importance.")
+                st.write(str(e))
+        with vis_tabs[1]:
+            try:
+                corr = df[[c for c in feature_names if c in df.columns]].corr()
+                fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.index, colorscale="RdBu", zmid=0))
+                fig.update_layout(title="Feature Correlation Matrix", xaxis_title="Feature", yaxis_title="Feature")
+                st.plotly_chart(fig, use_container_width=True)
+                st.write("Positive values indicate direct relationships; negative values indicate inverse relationships.")
+            except Exception as e:
+                st.warning("Could not render correlation matrix.")
+                st.write(str(e))
+        with vis_tabs[2]:
+            cols_int = st.columns(2)
+            x_choice = cols_int[0].selectbox("X Axis", [c for c in feature_names if c in df.columns], index=0)
+            y_choice = cols_int[1].selectbox("Y Axis", [c for c in feature_names if c in df.columns], index=1)
+            fig = px.scatter(df, x=x_choice, y=y_choice, color=df["Outcome"].astype(str), title="Interactive Feature Explorer", labels={"color": "Outcome"})
+            fig.update_layout(xaxis_title=x_choice, yaxis_title=y_choice)
+            st.plotly_chart(fig, use_container_width=True)
+            st.write("Use this plot to explore relationships between features.")
+
         b1, b2 = st.columns(2)
         with b1:
             if st.button("Modify inputs"):
@@ -342,7 +387,7 @@ if view == "results":
                     f"""
                     <script>
                     try {{
-                        localStorage.setItem('diabetes_inputs', JSON.stringify({ui}));
+                        localStorage.setItem('diabetes_inputs', '{json.dumps(ui)}');
                         localStorage.setItem('return_to','results');
                     }} catch(e) {{}}
                     document.documentElement.style.transition = 'opacity 300ms';
@@ -365,7 +410,7 @@ if view == "results":
                     f"""
                     <script>
                     try {{
-                        localStorage.setItem('diabetes_inputs', JSON.stringify({ui}));
+                        localStorage.setItem('diabetes_inputs', '{json.dumps(ui)}');
                         localStorage.setItem('return_to','results');
                     }} catch(e) {{}}
                     document.documentElement.style.transition = 'opacity 300ms';
