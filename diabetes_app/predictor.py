@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-from typing import Dict
 
 from .model import load_artifacts
 
@@ -17,4 +16,3 @@ def get_predictor():
         return {"prediction": pred, "probability": proba, "feature_names": feature_names}
 
     return predict
-

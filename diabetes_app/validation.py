@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import List
-
-from pydantic import BaseModel, Field, conint, confloat
+from pydantic import BaseModel, confloat, conint
 
 
 class HealthInput(BaseModel):
@@ -15,9 +13,8 @@ class HealthInput(BaseModel):
     DiabetesPedigreeFunction: confloat(ge=0.0, le=3.0)
     Age: conint(ge=10, le=120)
 
-    def to_array(self, feature_names: List[str]):
+    def to_array(self, feature_names: list[str]):
         values = []
         for name in feature_names:
             values.append(getattr(self, name))
         return values
-

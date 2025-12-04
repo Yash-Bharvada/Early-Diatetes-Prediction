@@ -1,13 +1,14 @@
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn import metrics
-from imblearn.combine import SMOTEENN
 from collections import Counter
+
 import joblib
+import numpy as np
+import pandas as pd
+from imblearn.combine import SMOTEENN
+from sklearn import metrics
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.preprocessing import StandardScaler
 
 # 1. Load dataset
 df = pd.read_csv("pima.csv")

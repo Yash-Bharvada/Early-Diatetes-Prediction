@@ -1,11 +1,10 @@
-import streamlit as st
 import numpy as np
 import pandas as pd
-from diabetes_app import get_predictor, HealthInput
-from diabetes_app.i18n import get_translator
+import streamlit as st
+
+from diabetes_app import HealthInput, get_predictor
 from diabetes_app.analytics import emit_event
-import shap
-import matplotlib.pyplot as plt
+from diabetes_app.i18n import get_translator
 
 _predict = get_predictor()
 model, scaler, feature_names = None, None, None
@@ -250,21 +249,33 @@ with tab_results:
             return f"<span class='pill'>{val}</span>"
         def risk_tag(feature, val):
             if feature == "Glucose":
-                if val < 100: return "LOW RISK"
-                if val < 126: return "MEDIUM RISK"
-                return "HIGH RISK"
+                if val < 100:
+                    return "LOW RISK"
+                elif val < 126:
+                    return "MEDIUM RISK"
+                else:
+                    return "HIGH RISK"
             if feature == "BMI":
-                if val < 25: return "LOW RISK"
-                if val < 30: return "MEDIUM RISK"
-                return "HIGH RISK"
+                if val < 25:
+                    return "LOW RISK"
+                elif val < 30:
+                    return "MEDIUM RISK"
+                else:
+                    return "HIGH RISK"
             if feature == "BloodPressure":
-                if 60 <= val <= 80: return "LOW RISK"
-                if 80 < val <= 90 or 50 <= val < 60: return "MEDIUM RISK"
-                return "HIGH RISK"
+                if 60 <= val <= 80:
+                    return "LOW RISK"
+                elif 80 < val <= 90 or 50 <= val < 60:
+                    return "MEDIUM RISK"
+                else:
+                    return "HIGH RISK"
             if feature == "Age":
-                if val < 40: return "LOW RISK"
-                if val < 60: return "MEDIUM RISK"
-                return "HIGH RISK"
+                if val < 40:
+                    return "LOW RISK"
+                elif val < 60:
+                    return "MEDIUM RISK"
+                else:
+                    return "HIGH RISK"
             return "—"
         with rcols[0]:
             st.markdown(f"<div class='panel'>Glucose Level {badge(ui.get('Glucose',''))}<br><small>{risk_tag('Glucose', ui.get('Glucose',0))}</small></div>", unsafe_allow_html=True)
