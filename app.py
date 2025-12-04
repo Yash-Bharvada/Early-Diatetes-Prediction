@@ -47,10 +47,28 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+t = get_translator("en")
+
+# Determine current view and theme from query params
+try:
+    q = st.query_params
+    view = q.get("view", "input")
+    theme_param = q.get("theme", "Dark")
+except Exception:
+    q = st.experimental_get_query_params()
+    view = q.get("view", ["input"])[0]
+    theme_param = q.get("theme", ["Dark"])[0]
+
 with st.sidebar:
-    theme = st.radio("Theme", ["Light", "Dark"], horizontal=True)
-    lang = st.selectbox("Language", ["en", "hi"], index=0)
+    theme = st.radio("Theme", ["Light", "Dark"], index=(0 if theme_param == "Light" else 1), horizontal=True)
+    lang = st.selectbox("Language", ["en", "hi"], index=(0 if q.get("lang", ["en"]) [0] == "en" else 1))
     st.markdown("### Settings")
+    # Persist theme/lang into URL for future sessions
+    try:
+        st.query_params["theme"] = theme
+        st.query_params["lang"] = lang
+    except Exception:
+        st.experimental_set_query_params(view=view, theme=theme, lang=lang)
 
 is_dark = theme == "Dark"
 primary_bg = "#0E1117" if is_dark else "#FFFFFF"
@@ -170,14 +188,6 @@ st.markdown(f"""
 
 t = get_translator(lang)
 
-# Determine current view from query params (input/results)
-try:
-    q = st.query_params
-    view = q.get("view", "input")
-except Exception:
-    q = st.experimental_get_query_params()
-    view = q.get("view", ["input"])[0]
-
 # Fade-in animation on load
 components.html(
     """
@@ -256,19 +266,15 @@ if view == "input" and submit:
             localStorage.setItem('diabetes_inputs', '{json.dumps(user_inputs)}');
             localStorage.setItem('calc_ts', '{st.session_state['calc_ts']}');
         }} catch(e) {{}}
-        document.documentElement.style.transition = 'opacity 300ms';
-        document.documentElement.style.opacity = 0;
-        setTimeout(()=>{{
-            const url = new URL(window.location);
-            url.searchParams.set('view','results');
-            window.history.pushState({{}},'',url);
-            window.location.reload();
-        }},300);
         </script>
         """,
         height=0,
     )
-    st.stop()
+    try:
+        st.query_params["view"] = "results"
+    except Exception:
+        st.experimental_set_query_params(view="results")
+    st.rerun()
 
 if view == "results":
     if "probability" not in st.session_state:
@@ -291,6 +297,28 @@ if view == "results":
             else:
                 st.success("Your risk factors are within healthy ranges. Continue a healthy lifestyle.")
             st.caption(f"Calculated at {st.session_state.get('calc_ts','')} UTC")
+
+        # Risk gauge using actual probability
+        theme_is_dark = (theme == "Dark")
+        paper = "#0E1117" if theme_is_dark else "#FFFFFF"
+        fontc = "#FAFAFA" if theme_is_dark else "#0E1117"
+        gauge = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=prob,
+            number={"valueformat": ".0%", "font": {"color": fontc}},
+            gauge={
+                "axis": {"range": [0, 1], "tickformat": ".0%", "tickcolor": fontc},
+                "bar": {"color": accent},
+                "steps": [
+                    {"range": [0, 0.2], "color": "#16a34a"},
+                    {"range": [0.2, 0.5], "color": "#f59e0b"},
+                    {"range": [0.5, 1.0], "color": "#ef4444"},
+                ],
+            },
+            domain={"x": [0, 1], "y": [0, 1]},
+        ))
+        gauge.update_layout(title={"text": "Overall Risk Level", "font": {"color": fontc}}, paper_bgcolor=paper, plot_bgcolor=paper)
+        st.plotly_chart(gauge, width='stretch')
 
         st.markdown(f"<div class='title'>{t('breakdown')}</div><div class='subtitle'>{t('breakdown_sub')}</div>", unsafe_allow_html=True)
         rcols = st.columns(2)
@@ -334,11 +362,42 @@ if view == "results":
             st.markdown(f"<div class='panel'>Age {badge(ui.get('Age',''))}<br><small>{risk_tag('Age', ui.get('Age',0))}</small></div>", unsafe_allow_html=True)
 
         st.markdown(f"<div class='title'>{t('recommendations')}</div>", unsafe_allow_html=True)
-        st.write("- Monitor blood glucose levels and maintain a balanced diet low in refined sugars.")
-        st.write("- Schedule regular check-ups with your healthcare provider for monitoring.")
-        st.write("- Stay hydrated, sleep 7–9 hours, and manage stress via mindfulness or exercise.")
+        def recommendations(probability, values):
+            recs = []
+            if probability < 0.2:
+                recs += [
+                    "Maintain balanced diet with whole grains and lean proteins.",
+                    "Continue regular physical activity (150 min/week).",
+                    "Annual screening for blood glucose.",
+                ]
+            elif probability < 0.5:
+                recs += [
+                    "Reduce refined sugars; increase fiber intake.",
+                    "Add 2–3 strength sessions weekly alongside cardio.",
+                    "Quarterly monitoring of fasting glucose.",
+                ]
+            else:
+                recs += [
+                    "Consult a healthcare provider for diagnostic testing.",
+                    "Adopt a medically supervised nutrition plan.",
+                    "Track glucose more frequently (weekly).",
+                ]
+            # Personalize by feature values
+            if values.get("BMI", 0) >= 30:
+                recs.append("Target 5–10% weight reduction over 6 months.")
+            if values.get("Glucose", 0) >= 126:
+                recs.append("Prioritize fasting glucose control and reduce high-glycemic foods.")
+            if values.get("BloodPressure", 0) >= 90:
+                recs.append("Limit sodium intake; monitor blood pressure weekly.")
+            return recs
 
-        vis_tabs = st.tabs(["Feature Importance", "Correlation Matrix", "Interactive Explorer"])
+        for item in recommendations(prob, ui):
+            st.write(f"- {item}")
+
+        # Validation messages
+        st.caption("Recommendations adapt to your risk and specific metrics (e.g., BMI, Glucose, BP).")
+
+        vis_tabs = st.tabs(["Feature Importance", "Correlation Matrix", "Interactive Explorer", "Risk Contribution"])
         with vis_tabs[0]:
             try:
                 m, s, fn = load_artifacts()
@@ -352,7 +411,7 @@ if view == "results":
                     df_imp = pd.DataFrame({"Feature": fn, "Importance": imp}).sort_values("Importance", ascending=False)
                     fig = px.bar(df_imp, x="Feature", y="Importance", title="Feature Importance Ranking", color="Importance", color_continuous_scale=[[0, accent],[1, accent]])
                     fig.update_layout(xaxis_title="Feature", yaxis_title="Importance", legend_title="")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     top = df_imp.iloc[0]
                     st.write(f"Top contributor: {top['Feature']}.")
                 else:
@@ -365,7 +424,7 @@ if view == "results":
                 corr = df[[c for c in feature_names if c in df.columns]].corr()
                 fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.index, colorscale="RdBu", zmid=0))
                 fig.update_layout(title="Feature Correlation Matrix", xaxis_title="Feature", yaxis_title="Feature")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
                 st.write("Positive values indicate direct relationships; negative values indicate inverse relationships.")
             except Exception as e:
                 st.warning("Could not render correlation matrix.")
@@ -376,8 +435,34 @@ if view == "results":
             y_choice = cols_int[1].selectbox("Y Axis", [c for c in feature_names if c in df.columns], index=1)
             fig = px.scatter(df, x=x_choice, y=y_choice, color=df["Outcome"].astype(str), title="Interactive Feature Explorer", labels={"color": "Outcome"})
             fig.update_layout(xaxis_title=x_choice, yaxis_title=y_choice)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             st.write("Use this plot to explore relationships between features.")
+        with vis_tabs[3]:
+            try:
+                # Risk contribution for current input using model coefficients (logit domain)
+                m, s, fn = load_artifacts()
+                if hasattr(m, "coef_") and hasattr(m, "intercept_"):
+                    X_df = pd.DataFrame([ui.get(f, 0) for f in fn]).T
+                    X_df.columns = fn
+                    X_scaled = s.transform(X_df)
+                    contrib = (m.coef_[0] * X_scaled[0]).tolist()
+                    base = float(m.intercept_[0])
+                    df_wf = pd.DataFrame({"Feature": fn, "Contribution": contrib})
+                    df_wf = df_wf.sort_values("Contribution", key=abs, ascending=False)
+                    fig = go.Figure(go.Waterfall(
+                        measure=["relative"] * len(df_wf) + ["total"],
+                        x=list(df_wf["Feature"]) + ["Total"],
+                        text=[f"{v:+.2f}" for v in df_wf["Contribution"]] + [""],
+                        y=list(df_wf["Contribution"]) + [sum(df_wf["Contribution"]) + base],
+                    ))
+                    fig.update_layout(title="Risk Contribution (logit)", yaxis_title="Contribution", paper_bgcolor=paper, plot_bgcolor=paper, font={"color": fontc})
+                    st.plotly_chart(fig, width='stretch')
+                    st.caption("Bars show how your values shift the model's logit; total maps to predicted probability via sigmoid.")
+                else:
+                    st.info("Risk contribution view available for linear models with coefficients.")
+            except Exception as e:
+                st.warning("Could not render risk contribution.")
+                st.write(str(e))
 
         b1, b2 = st.columns(2)
         with b1:
@@ -390,19 +475,15 @@ if view == "results":
                         localStorage.setItem('diabetes_inputs', '{json.dumps(ui)}');
                         localStorage.setItem('return_to','results');
                     }} catch(e) {{}}
-                    document.documentElement.style.transition = 'opacity 300ms';
-                    document.documentElement.style.opacity = 0;
-                    setTimeout(()=>{{
-                        const url = new URL(window.location);
-                        url.searchParams.set('view','input');
-                        window.history.pushState({{}},'',url);
-                        window.location.reload();
-                    }},300);
                     </script>
                     """,
                     height=0,
                 )
-                st.stop()
+                try:
+                    st.query_params["view"] = "input"
+                except Exception:
+                    st.experimental_set_query_params(view="input")
+                st.rerun()
         with b2:
             if st.button("Recalculate"):
                 st.toast("Modify inputs and recalculate")
@@ -413,19 +494,15 @@ if view == "results":
                         localStorage.setItem('diabetes_inputs', '{json.dumps(ui)}');
                         localStorage.setItem('return_to','results');
                     }} catch(e) {{}}
-                    document.documentElement.style.transition = 'opacity 300ms';
-                    document.documentElement.style.opacity = 0;
-                    setTimeout(()=>{{
-                        const url = new URL(window.location);
-                        url.searchParams.set('view','input');
-                        window.history.pushState({{}},'',url);
-                        window.location.reload();
-                    }},300);
                     </script>
                     """,
                     height=0,
                 )
-                st.stop()
+                try:
+                    st.query_params["view"] = "input"
+                except Exception:
+                    st.experimental_set_query_params(view="input")
+                st.rerun()
 
     st.info("💡 This result is an estimate. Please consult a medical professional.")
 
