@@ -5,6 +5,7 @@ import streamlit as st
 from diabetes_app import HealthInput, get_predictor
 from diabetes_app.analytics import emit_event
 from diabetes_app.i18n import get_translator
+import streamlit.components.v1 as components
 
 _predict = get_predictor()
 model, scaler, feature_names = None, None, None
@@ -164,58 +165,69 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 t = get_translator(lang)
-# Controlled tab switch via radio for accessibility and programmatic navigation
-if "view" not in st.session_state:
-    st.session_state["view"] = "input"
-view = st.radio(
-    "View",
-    options=["input", "results"],
-    format_func=lambda x: t("tab_input") if x == "input" else t("tab_results"),
-    horizontal=True,
-    key="view",
+
+# Determine current view from query params (input/results)
+try:
+    q = st.query_params
+    view = q.get("view", "input")
+except Exception:
+    q = st.experimental_get_query_params()
+    view = q.get("view", ["input"])[0]
+
+# Fade-in animation on load
+components.html(
+    """
+    <script>
+    document.documentElement.style.opacity = 0;
+    document.documentElement.style.transition = 'opacity 300ms';
+    window.addEventListener('load', ()=>{document.documentElement.style.opacity = 1;});
+    </script>
+    """,
+    height=0,
 )
 
 if view == "input":
     with st.form("prediction_form"):
         user_inputs = {}
         left, right = st.columns(2)
+        defaults = st.session_state.get("user_inputs", {})
 
         with left:
             st.markdown(f"<div class='title' aria-label='{t('glucose_insulin')}'>{t('glucose_insulin')}</div><div class='subtitle'>Blood sugar and insulin levels</div>", unsafe_allow_html=True)
-            g = st.slider(t("glucose"), 0, 300, int(feature_defaults.get("Glucose", 110)))
+            g = st.slider(t("glucose"), 0, 300, int(defaults.get("Glucose", feature_defaults.get("Glucose", 110))))
             st.caption("Normal: 70-100 mg/dL (fasting)")
-            i = st.slider(t("insulin"), 0, 300, int(min(feature_defaults.get("Insulin", 80), 300)))
+            i = st.slider(t("insulin"), 0, 300, int(min(defaults.get("Insulin", feature_defaults.get("Insulin", 80)), 300)))
             user_inputs["Glucose"] = g
             user_inputs["Insulin"] = i
 
         with right:
             st.markdown(f"<div class='title' aria-label='{t('cardio')}'>{t('cardio')}</div><div class='subtitle'>Blood pressure measurements</div>", unsafe_allow_html=True)
-            bp = st.slider(t("bp"), 40, 140, int(max(40, min(feature_defaults.get("BloodPressure", 80), 140))))
+            bp = st.slider(t("bp"), 40, 140, int(max(40, min(defaults.get("BloodPressure", feature_defaults.get("BloodPressure", 80)), 140))))
             st.caption("Normal: 60-80 mmHg (diastolic)")
-            st_val = st.slider(t("skin"), 0, 80, int(min(feature_defaults.get("SkinThickness", 20), 80)))
+            st_val = st.slider(t("skin"), 0, 80, int(min(defaults.get("SkinThickness", feature_defaults.get("SkinThickness", 20)), 80)))
             user_inputs["BloodPressure"] = bp
             user_inputs["SkinThickness"] = st_val
 
         left2, right2 = st.columns(2)
         with left2:
             st.markdown(f"<div class='title' aria-label='{t('body_metrics')}'>{t('body_metrics')}</div><div class='subtitle'>Physical measurements</div>", unsafe_allow_html=True)
-            bmi = st.slider(t("bmi"), 10.0, 60.0, float(feature_defaults.get("BMI", 25.0)), step=0.1)
+            bmi = st.slider(t("bmi"), 10.0, 60.0, float(defaults.get("BMI", feature_defaults.get("BMI", 25.0))), step=0.1)
             st.caption("Normal: 18.5-24.9")
-            dpf = st.slider(t("dpf"), 0.0, 2.5, float(feature_defaults.get("DiabetesPedigreeFunction", 0.5)), step=0.01)
+            dpf = st.slider(t("dpf"), 0.0, 2.5, float(defaults.get("DiabetesPedigreeFunction", feature_defaults.get("DiabetesPedigreeFunction", 0.5))), step=0.01)
             user_inputs["BMI"] = bmi
             user_inputs["DiabetesPedigreeFunction"] = dpf
 
         with right2:
             st.markdown(f"<div class='title' aria-label='{t('demographics')}'>{t('demographics')}</div><div class='subtitle'>Personal information</div>", unsafe_allow_html=True)
-            age = st.slider(t("age"), 10, 100, int(feature_defaults.get("Age", 35)))
-            preg = st.slider(t("preg"), 0, 15, int(feature_defaults.get("Pregnancies", 0)))
+            age = st.slider(t("age"), 10, 100, int(defaults.get("Age", feature_defaults.get("Age", 35))))
+            preg = st.slider(t("preg"), 0, 15, int(defaults.get("Pregnancies", feature_defaults.get("Pregnancies", 0))))
             user_inputs["Age"] = age
             user_inputs["Pregnancies"] = preg
 
         submit = st.form_submit_button(t("calc_button"))
 
 # --- Predict and explain ---
-if submit:
+if view == "input" and submit:
     full_values = []
     # Use validation model if feature_names known
     if feature_names:
@@ -225,14 +237,37 @@ if submit:
     else:
         for name in user_inputs:
             full_values.append(user_inputs[name])
-    result = _predict(full_values)
+    with st.spinner("Calculating..."):
+        result = _predict(full_values)
     st.session_state["prediction"] = result["prediction"]
     st.session_state["probability"] = result["probability"]
     st.session_state["user_inputs"] = user_inputs
     emit_event("predict", {"probability": result["probability"], "prediction": result["prediction"]})
-    st.session_state["view"] = "results"
+    st.session_state["calc_ts"] = pd.Timestamp.utcnow().isoformat()
+    # Persist inputs & timestamp to localStorage, then navigate to results with animation
+    components.html(
+        f"""
+        <script>
+        const data = {json: '{pd.Series(user_inputs).to_json()}'};
+        try {{
+            localStorage.setItem('diabetes_inputs', JSON.stringify({user_inputs}));
+            localStorage.setItem('calc_ts', '{st.session_state['calc_ts']}');
+        }} catch(e) {{}}
+        document.documentElement.style.transition = 'opacity 300ms';
+        document.documentElement.style.opacity = 0;
+        setTimeout(()=>{{
+            const url = new URL(window.location);
+            url.searchParams.set('view','results');
+            window.history.pushState({{}},'',url);
+            window.location.reload();
+        }},300);
+        </script>
+        """,
+        height=0,
+    )
+    st.stop()
 
-else:
+if view == "results":
     if "probability" not in st.session_state:
         st.info("Provide input data and click Calculate Risk Score.")
     else:
@@ -302,22 +337,50 @@ else:
         b1, b2 = st.columns(2)
         with b1:
             if st.button("Modify inputs"):
-                st.session_state["view"] = "input"
-                st.rerun()
+                st.toast("Navigating to input…")
+                components.html(
+                    f"""
+                    <script>
+                    try {{
+                        localStorage.setItem('diabetes_inputs', JSON.stringify({ui}));
+                        localStorage.setItem('return_to','results');
+                    }} catch(e) {{}}
+                    document.documentElement.style.transition = 'opacity 300ms';
+                    document.documentElement.style.opacity = 0;
+                    setTimeout(()=>{{
+                        const url = new URL(window.location);
+                        url.searchParams.set('view','input');
+                        window.history.pushState({{}},'',url);
+                        window.location.reload();
+                    }},300);
+                    </script>
+                    """,
+                    height=0,
+                )
+                st.stop()
         with b2:
             if st.button("Recalculate"):
-                ui_state = st.session_state.get("user_inputs")
-                if ui_state:
-                    if feature_names:
-                        validated = HealthInput(**{fn: ui_state.get(fn, int(feature_defaults.get(fn, 0))) for fn in feature_names})
-                        fv = validated.to_array(feature_names)
-                    else:
-                        fv = [ui_state.get(k) for k in sorted(ui_state.keys())]
-                    result = _predict(fv)
-                    st.session_state["prediction"] = result["prediction"]
-                    st.session_state["probability"] = result["probability"]
-                    st.session_state["view"] = "results"
-                    st.rerun()
+                st.toast("Modify inputs and recalculate")
+                components.html(
+                    f"""
+                    <script>
+                    try {{
+                        localStorage.setItem('diabetes_inputs', JSON.stringify({ui}));
+                        localStorage.setItem('return_to','results');
+                    }} catch(e) {{}}
+                    document.documentElement.style.transition = 'opacity 300ms';
+                    document.documentElement.style.opacity = 0;
+                    setTimeout(()=>{{
+                        const url = new URL(window.location);
+                        url.searchParams.set('view','input');
+                        window.history.pushState({{}},'',url);
+                        window.location.reload();
+                    }},300);
+                    </script>
+                    """,
+                    height=0,
+                )
+                st.stop()
 
     st.info("💡 This result is an estimate. Please consult a medical professional.")
 
