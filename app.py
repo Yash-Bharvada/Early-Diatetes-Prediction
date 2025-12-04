@@ -74,11 +74,12 @@ st.markdown(f"""
         padding: 0.6rem 1rem;
         border: none;
         box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        font-weight: 600;
     }}
-    /* Ensure submit buttons inside forms are styled */
     .stButton button,
     form button,
-    div[data-testid="baseButton-primary"] > button {{
+    div[data-testid="baseButton-primary"] > button,
+    div[data-testid="stFormSubmitButton"] > button {{
         background-color: {accent} !important;
         color: #ffffff !important;
         font-weight: 600;
